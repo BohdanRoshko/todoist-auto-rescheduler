@@ -1,0 +1,120 @@
+import requests
+from datetime import datetime, timedelta
+import logging
+import sys
+import os
+
+# Configure logging to write to a file
+log_directory = r"PATH_FOR_LOGS"  # Ensure this directory exists
+os.makedirs(log_directory, exist_ok=True)  # Create the directory if it doesn't exist
+
+log_file = os.path.join(log_directory, "todoist_update_due_dates.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, mode='a', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)  # Also log to console (useful when running manually)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Replace with your actual Todoist API token
+API_TOKEN = 'API_TOKEN_HERE'  # <-- Replace this with your Todoist API token
+
+# Define headers for authentication
+headers = {
+    'Authorization': f'Bearer {API_TOKEN}',
+    'Content-Type': 'application/json'
+}
+
+def get_incomplete_tasks_due_today():
+    """
+    Fetch all incomplete tasks from Todoist and filter those due today.
+    Uses REST API v2 endpoint.
+    """
+    today = datetime.now().strftime('%Y-%m-%d')
+    url = 'https://api.todoist.com/rest/v2/tasks'
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        tasks = response.json()
+
+        # Filter tasks that are incomplete and due today
+        due_today_tasks = [
+            task for task in tasks
+            if not task.get('completed', False) and
+               task.get('due') and
+               task['due'].get('date') == today
+        ]
+
+        logger.info(f"Fetched {len(due_today_tasks)} incomplete task(s) due today.")
+        return due_today_tasks
+
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error occurred while fetching tasks: {http_err}")
+        if http_err.response is not None:
+            logger.debug(f"Response content: {http_err.response.text}")
+        sys.exit(1)
+    except Exception as err:
+        logger.error(f"An error occurred while fetching tasks: {err}")
+        sys.exit(1)
+
+def update_task_due_date(task_id, new_due_date):
+    """
+    Update the due date of a specific task using REST API v2.
+    """
+    url = f'https://api.todoist.com/rest/v2/tasks/{task_id}'
+    payload = {
+        'due_date': new_due_date  # Correctly setting 'due_date' as a top-level field
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        updated_task = response.json()
+        logger.info(f"Updated Task ID {task_id} to due date {new_due_date}")
+        return updated_task
+
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error occurred while updating task {task_id}: {http_err}")
+        if http_err.response is not None:
+            logger.debug(f"Response content: {http_err.response.text}")
+        return None
+    except Exception as err:
+        logger.error(f"An error occurred while updating task {task_id}: {err}")
+        return None
+
+def main():
+    """
+    Main function to fetch and update tasks.
+    """
+    # Step 1: Fetch incomplete tasks due today
+    tasks = get_incomplete_tasks_due_today()
+
+    if not tasks:
+        logger.info("No incomplete tasks due today.")
+        return
+
+    # Step 2: Determine tomorrow's date
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    logger.info(f"Tomorrow's date will be: {tomorrow}")
+
+    # Step 3: Update each task's due date to tomorrow
+    success_count = 0
+    for task in tasks:
+        task_id = task['id']
+        content = task.get('content', 'No Content')
+        due_date = task.get('due', {}).get('date', 'No Due Date')
+        logger.info(f"Updating Task ID {task_id} ('{content}') from due date {due_date} to {tomorrow}")
+
+        updated_task = update_task_due_date(task_id, tomorrow)
+        if updated_task:
+            success_count += 1
+
+    logger.info(f"Successfully updated {success_count} out of {len(tasks)} task(s).")
+
+if __name__ == "__main__":
+    main()
